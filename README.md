@@ -16,7 +16,21 @@
 ```
 
 ## Status
-🚧 Pre-alpha. See [PLAN.md](./PLAN.md).
+🚧 Pre-alpha (M1 scaffold). See [PLAN.md](./PLAN.md).
+
+## Install (dev)
+```bash
+uv venv && uv pip install -e ".[dev]"
+```
+
+## Usage
+```bash
+link-coroner --version
+link-coroner scan path/to/repo
+```
+
+In M1, `scan` walks the path and prints every URL it would autopsy.
+Real probing (DNS, HTTP, TLS) lands in M2.
 
 ## Why
 Existing link checkers print a status code and exit. `link-coroner` tells you _what killed it_, _when_, and _where the body is buried_ — with personality.
