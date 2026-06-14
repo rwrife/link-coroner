@@ -16,7 +16,7 @@
 ```
 
 ## Status
-🚧 Pre-alpha (M1 scaffold). See [PLAN.md](./PLAN.md).
+🚧 Pre-alpha (M2 — basic autopsy). See [PLAN.md](./PLAN.md).
 
 ## Install (dev)
 ```bash
@@ -26,11 +26,15 @@ uv venv && uv pip install -e ".[dev]"
 ## Usage
 ```bash
 link-coroner --version
-link-coroner scan path/to/repo
+link-coroner scan path/to/repo            # list URLs only
+link-coroner autopsy path/to/repo          # probe + verdict each URL
+link-coroner autopsy . --format json       # machine-readable
+link-coroner autopsy . --concurrency 32 --per-host 8 --timeout 5
 ```
 
-In M1, `scan` walks the path and prints every URL it would autopsy.
-Real probing (DNS, HTTP, TLS) lands in M2.
+`autopsy` exits non-zero if any links come back **DEAD** (disable with `--no-fail-on-dead`).
+M2 verdicts are intentionally coarse — `ALIVE | DEAD | UNREACHABLE`. Full cause-of-death
+taxonomy + death certificate rendering land in M3.
 
 ## Why
 Existing link checkers print a status code and exit. `link-coroner` tells you _what killed it_, _when_, and _where the body is buried_ — with personality.
