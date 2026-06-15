@@ -9,8 +9,9 @@ import typer
 from rich.console import Console
 
 from . import __version__
+from .diagnosis import exit_code_for
 from .forensics.probe import ProbeConfig, Verdict, probe_urls
-from .reporting.autopsy import render_json, render_pretty
+from .reporting.autopsy import render_certificates, render_json, render_pretty
 from .scanner.extractors import extract_urls
 from .scanner.walker import walk_paths
 
@@ -121,11 +122,22 @@ def autopsy(
         "--fail-on-dead/--no-fail-on-dead",
         help="Exit non-zero if any DEAD links are found.",
     ),
+    fail_on: str = typer.Option(
+        "dead",
+        "--fail-on",
+        case_sensitive=False,
+        help="Severity threshold for non-zero exit: dead | suspicious | never.",
+    ),
 ) -> None:
     """Walk PATH, probe every URL, and verdict each as ALIVE/DEAD/UNREACHABLE."""
     fmt = output.lower()
-    if fmt not in {"pretty", "json"}:
-        raise typer.BadParameter("--format must be one of: pretty, json")
+    if fmt not in {"pretty", "json", "certificates", "table"}:
+        raise typer.BadParameter(
+            "--format must be one of: pretty, certificates, table, json"
+        )
+    fail_on_norm = fail_on.lower()
+    if fail_on_norm not in {"dead", "suspicious", "never"}:
+        raise typer.BadParameter("--fail-on must be one of: dead, suspicious, never")
 
     urls = _collect_urls(path)
     if not urls:
@@ -144,11 +156,19 @@ def autopsy(
 
     if fmt == "json":
         typer.echo(render_json(results))
-    else:
+    elif fmt == "table":
         render_pretty(results, console)
+    else:
+        # "pretty" now means certificates (M3); "certificates" is the explicit alias.
+        render_certificates(results, console)
 
-    if fail_on_dead and any(r.verdict is Verdict.DEAD for r in results):
-        raise typer.Exit(1)
+    if fail_on_norm == "never":
+        raise typer.Exit(0)
+    threshold = Verdict.DEAD if fail_on_norm == "dead" else Verdict.UNREACHABLE
+    # --no-fail-on-dead still wins as a kill-switch for backwards compat.
+    if not fail_on_dead:
+        raise typer.Exit(0)
+    raise typer.Exit(exit_code_for(results, threshold=threshold))
 
 
 if __name__ == "__main__":  # pragma: no cover
