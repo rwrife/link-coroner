@@ -30,6 +30,8 @@ class Cause(StrEnum):
     TIMEOUT = "TIMEOUT"
     REDIRECT_LOOP = "REDIRECT_LOOP"
     BAD_URL = "BAD_URL"
+    SOFT_404 = "SOFT_404"
+    PARKED = "PARKED"
     UNKNOWN = "UNKNOWN"
 
 
@@ -45,6 +47,8 @@ _CAUSE_BLURBS: dict[Cause, str] = {
     Cause.TIMEOUT: "No response within the autopsy window.",
     Cause.REDIRECT_LOOP: "Caught in an eternal redirect — vertigo unto death.",
     Cause.BAD_URL: "URL itself is malformed — dead on arrival.",
+    Cause.SOFT_404: "Server says 200, but the page is a tombstone in disguise.",
+    Cause.PARKED: "Domain has been parked or listed for sale — the body was stolen.",
     Cause.UNKNOWN: "Cause undetermined; further forensics required.",
 }
 
@@ -90,6 +94,10 @@ def diagnose(result: ProbeResult) -> Cause:
         return Cause.REDIRECT_LOOP
     if reason == "BAD_URL":
         return Cause.BAD_URL
+    if reason == "SOFT_404":
+        return Cause.SOFT_404
+    if reason == "PARKED":
+        return Cause.PARKED
     if reason.startswith("CONN_ERROR"):
         return _classify_conn_error(reason)
     if reason.startswith("HTTP_ERROR"):
