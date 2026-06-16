@@ -16,7 +16,7 @@
 ```
 
 ## Status
-🚧 Pre-alpha (M2 — basic autopsy). See [PLAN.md](./PLAN.md).
+🚧 Pre-alpha (M3 — death certificates & causes). See [PLAN.md](./PLAN.md).
 
 ## Install (dev)
 ```bash
@@ -26,15 +26,24 @@ uv venv && uv pip install -e ".[dev]"
 ## Usage
 ```bash
 link-coroner --version
-link-coroner scan path/to/repo            # list URLs only
-link-coroner autopsy path/to/repo          # probe + verdict each URL
-link-coroner autopsy . --format json       # machine-readable
+link-coroner scan path/to/repo                # list URLs only
+link-coroner autopsy path/to/repo              # probe + render death certificates
+link-coroner autopsy . --format table          # compact table view (M2-style)
+link-coroner autopsy . --format json           # machine-readable, includes cause + blurb
+link-coroner autopsy . --fail-on suspicious    # also exit non-zero on UNREACHABLE
 link-coroner autopsy . --concurrency 32 --per-host 8 --timeout 5
 ```
 
-`autopsy` exits non-zero if any links come back **DEAD** (disable with `--no-fail-on-dead`).
-M2 verdicts are intentionally coarse — `ALIVE | DEAD | UNREACHABLE`. Full cause-of-death
-taxonomy + death certificate rendering land in M3.
+### Output formats
+- `pretty` (default) — rich-rendered **death certificate** per deceased URL + summary footer.
+- `certificates` — explicit alias of `pretty`.
+- `table` — compact table of every result (good for >100 URLs).
+- `json` — every result with the M3 cause taxonomy (`ALIVE`, `NXDOMAIN`, `DNS_FAILURE`, `CONN_REFUSED`, `TLS_EXPIRED`, `TLS_ERROR`, `HTTP_4XX`, `HTTP_5XX`, `TIMEOUT`, `REDIRECT_LOOP`, `BAD_URL`, `UNKNOWN`).
+
+### Exit codes
+- `--fail-on dead` (default) — exit 1 if any URL is `DEAD`.
+- `--fail-on suspicious` — exit 1 on `DEAD` _or_ `UNREACHABLE`.
+- `--fail-on never` (or `--no-fail-on-dead`) — always exit 0.
 
 ## Why
 Existing link checkers print a status code and exit. `link-coroner` tells you _what killed it_, _when_, and _where the body is buried_ — with personality.
