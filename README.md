@@ -16,7 +16,7 @@
 ```
 
 ## Status
-🚧 Pre-alpha (M4 — soft-404 + parked-domain detection). See [PLAN.md](./PLAN.md).
+🚧 Pre-alpha (M5 — Wayback resurrection). See [PLAN.md](./PLAN.md).
 
 ## Install (dev)
 ```bash
@@ -32,6 +32,9 @@ link-coroner autopsy . --format table          # compact table view (M2-style)
 link-coroner autopsy . --format json           # machine-readable, includes cause + blurb
 link-coroner autopsy . --fail-on suspicious    # also exit non-zero on UNREACHABLE
 link-coroner autopsy . --concurrency 32 --per-host 8 --timeout 5
+link-coroner autopsy . --resurrect                # add Wayback snapshot links
+link-coroner rewrite path/to/repo                 # dry-run patch dead URLs
+link-coroner rewrite path/to/repo --apply          # actually rewrite (with .bak)
 ```
 
 ### Output formats
@@ -47,6 +50,17 @@ bodies for **soft-404** templates ("page not found", tiny 404 pages) and
 those to `UNREACHABLE` with a `SOFT_404` or `PARKED` cause. Disable with the
 library-level `ProbeConfig(detect_soft_404=False)` if you need pure status-code
 behaviour.
+
+### Wayback resurrection (M5)
+Pass `--resurrect` to `autopsy` to query the Wayback Machine for every
+deceased URL. Each death certificate gets a `Resurrect at:` line pointing
+at the closest archived snapshot, plus an estimated **time of death**
+based on the most recent healthy CDX snapshot.
+
+The `rewrite` command goes further: it probes URLs, asks Wayback for
+snapshots, and patches the dead ones in place. Dry-run by default; pass
+`--apply` to actually overwrite files (a `.bak` sibling is written for
+each touched file unless you pass `--no-backup`).
 
 ### Exit codes
 - `--fail-on dead` (default) — exit 1 if any URL is `DEAD`.
