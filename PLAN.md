@@ -70,8 +70,8 @@ Pipeline: walker → extractor → dedupe → async probe fan-out → diagnosis 
 ## 7. Milestones
 1. **M1 — scaffold + hello-world** — Repo layout, `uv`-managed env, `link-coroner --version`, `link-coroner scan PATH` that prints discovered URLs only. CI runs lint + tests.
 2. **M2 — basic autopsy** — DNS + HTTP HEAD/GET probes; classifies each URL as `ALIVE | DEAD | UNREACHABLE`. Pretty + JSON output.
-3. **M3 — death certificates & causes** — Rich-rendered certificate cards; cause taxonomy (NXDOMAIN, CONN_REFUSED, TLS_EXPIRED, HTTP_4XX, HTTP_5XX, TIMEOUT, REDIRECT_LOOP). Exit codes.
-4. **M4 — soft-404 + parked-domain + drift detection** — Heuristics module; title/hash baselines via cache; flag "alive but content suspicious."
+3. **M3 — death certificates & causes** — Rich-rendered certificate cards; cause taxonomy (NXDOMAIN, CONN_REFUSED, TLS_EXPIRED, HTTP_4XX, HTTP_5XX, TIMEOUT, REDIRECT_LOOP). Exit codes. **✅ Shipped.**
+4. **M4 — soft-404 + parked-domain + drift detection** — Heuristics module; title/hash baselines via cache; flag "alive but content suspicious." Soft-404 + parked detection shipped; content-drift waits on M5 cache layer.
 5. **M5 — Wayback resurrection** — For deceased URLs, query Wayback Machine, suggest closest snapshot + estimated time-of-death via bisection. `--rewrite` flag to patch files in-place.
 6. **M6 — GitHub Action + pre-commit hook + JUnit/SARIF output** — Shippable action, docs, badges. v0.1.0 release.
 

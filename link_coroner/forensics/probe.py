@@ -16,6 +16,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from .soft404 import analyze_content, is_html
+
 try:  # dnspython is optional at runtime — we degrade gracefully in tests.
     import dns.asyncresolver  # type: ignore[import-untyped]
     import dns.exception  # type: ignore[import-untyped]
@@ -63,6 +65,10 @@ class ProbeConfig:
     alive_status_codes: frozenset[int] = field(
         default_factory=lambda: frozenset({401, 403, 405, 429})
     )
+    # M4: inspect body of HTML 2xx responses to catch soft-404 / parked pages.
+    detect_soft_404: bool = True
+    # Cap body read so giant HTML pages don't slow us down.
+    max_body_bytes: int = 64 * 1024
 
 
 def _host_of(url: str) -> str:
@@ -143,14 +149,66 @@ async def _probe_one(
 
             elapsed_ms = int((loop.time() - started) * 1000)
             verdict, reason = _classify_status(response.status_code, cfg.alive_status_codes)
+            final_url = str(response.url) if str(response.url) != url else None
+
+            # M4: peek at HTML bodies of 2xx responses to catch soft-404 / parked pages.
+            if (
+                cfg.detect_soft_404
+                and verdict is Verdict.ALIVE
+                and 200 <= response.status_code < 300
+            ):
+                soft = await _sniff_content(url, response, client, cfg)
+                if soft is not None:
+                    verdict = Verdict.UNREACHABLE
+                    reason = soft
+
             return ProbeResult(
                 url=url,
                 verdict=verdict,
                 reason=reason,
                 status_code=response.status_code,
                 elapsed_ms=elapsed_ms,
-                final_url=str(response.url) if str(response.url) != url else None,
+                final_url=final_url,
             )
+
+
+async def _sniff_content(
+    url: str,
+    response: httpx.Response,
+    client: httpx.AsyncClient,
+    cfg: ProbeConfig,
+) -> str | None:
+    """Return a soft-404 / parked ``reason`` string, or ``None`` if the body is fine.
+
+    ``response`` may be from a HEAD request (no body). If the content-type looks
+    like HTML we issue a follow-up GET capped at ``cfg.max_body_bytes``.
+    """
+    content_type = response.headers.get("content-type")
+    final_url = str(response.url)
+
+    # Cheap parked-host check on the redirect target — no body needed.
+    quick = analyze_content(b"", content_type=None, final_url=final_url)
+    if quick.suspicious:
+        return quick.reason
+
+    if not is_html(content_type):
+        return None
+
+    body: str | bytes
+    if response.request is not None and response.request.method.upper() == "GET":
+        # We already have the body (HEAD fell back to GET upstream).
+        body = response.content[: cfg.max_body_bytes] if response.content else b""
+    else:
+        try:
+            follow = await client.get(url, headers={"Range": f"bytes=0-{cfg.max_body_bytes - 1}"})
+        except httpx.HTTPError:
+            return None
+        body = follow.content[: cfg.max_body_bytes] if follow.content else b""
+        content_type = follow.headers.get("content-type", content_type)
+        final_url = str(follow.url)
+
+    verdict = analyze_content(body, content_type=content_type, final_url=final_url)
+    return verdict.reason if verdict.suspicious else None
 
 
 async def probe_urls(

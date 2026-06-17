@@ -40,6 +40,8 @@ _CAUSE_GLYPH = {
     Cause.TIMEOUT: "⌛",
     Cause.REDIRECT_LOOP: "🌀",
     Cause.BAD_URL: "❓",
+    Cause.SOFT_404: "🧟",
+    Cause.PARKED: "🅿️",
     Cause.UNKNOWN: "❔",
 }
 
