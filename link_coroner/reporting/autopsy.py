@@ -22,6 +22,7 @@ from rich.text import Text
 
 from ..diagnosis import Cause, cause_blurb, diagnose
 from ..forensics.probe import ProbeResult, Verdict
+from ..wayback import WaybackSnapshot
 
 _VERDICT_STYLES = {
     Verdict.ALIVE: "green",
@@ -75,7 +76,12 @@ def render_pretty(results: Iterable[ProbeResult], console: Console) -> None:
 # ---- death certificates (M3) ------------------------------------------------------
 
 
-def _certificate_for(result: ProbeResult, *, now: datetime | None = None) -> Panel:
+def _certificate_for(
+    result: ProbeResult,
+    *,
+    now: datetime | None = None,
+    snapshot: WaybackSnapshot | None = None,
+) -> Panel:
     cause = diagnose(result)
     glyph = _CAUSE_GLYPH.get(cause, "🪦")
     style = _VERDICT_STYLES.get(result.verdict, "white")
@@ -100,7 +106,16 @@ def _certificate_for(result: ProbeResult, *, now: datetime | None = None) -> Pan
         body.append("Final URL:     ", style="bold")
         body.append(f"{result.final_url}\n", style="dim")
     body.append("Time of death: ", style="bold")
-    body.append(timestamp, style="dim")
+    tod = snapshot.time_of_death if snapshot and snapshot.time_of_death else None
+    if tod:
+        body.append(f"{tod}\n", style="dim")
+        body.append("Filed at:      ", style="bold")
+        body.append(f"{timestamp}", style="dim")
+    else:
+        body.append(timestamp, style="dim")
+    if snapshot and snapshot.snapshot_url:
+        body.append("\nResurrect at:  ", style="bold")
+        body.append(f"{snapshot.snapshot_url}", style="cyan")
 
     title = f"{glyph}  CERTIFICATE OF DEATH"
     if result.verdict is Verdict.UNREACHABLE:
@@ -131,14 +146,20 @@ def _print_summary(results: list[ProbeResult], console: Console) -> None:
     )
 
 
-def render_certificates(results: Iterable[ProbeResult], console: Console) -> None:
+def render_certificates(
+    results: Iterable[ProbeResult],
+    console: Console,
+    *,
+    snapshots: dict[str, WaybackSnapshot] | None = None,
+) -> None:
     """Render a death-certificate panel for each non-ALIVE result, plus a summary."""
     results = list(results)
     deceased = [r for r in results if r.verdict is not Verdict.ALIVE]
+    snapshots = snapshots or {}
 
     if deceased:
         console.print(
-            Group(*[_certificate_for(r) for r in deceased])
+            Group(*[_certificate_for(r, snapshot=snapshots.get(r.url)) for r in deceased])
         )
     else:
         console.print(
@@ -152,13 +173,21 @@ def render_certificates(results: Iterable[ProbeResult], console: Console) -> Non
     _print_summary(results, console)
 
 
-def render_json(results: Iterable[ProbeResult]) -> str:
-    """JSON output, enriched with the M3 cause taxonomy."""
+def render_json(
+    results: Iterable[ProbeResult],
+    *,
+    snapshots: dict[str, WaybackSnapshot] | None = None,
+) -> str:
+    """JSON output, enriched with the M3 cause taxonomy and M5 resurrection data."""
+    snapshots = snapshots or {}
     payload = []
     for r in results:
         item = r.to_dict()
         cause = diagnose(r)
         item["cause"] = cause.value
         item["cause_blurb"] = cause_blurb(cause)
+        snap = snapshots.get(r.url)
+        if snap and snap.snapshot_url:
+            item["wayback"] = snap.to_dict()
         payload.append(item)
     return json.dumps(payload, indent=2, sort_keys=True)
