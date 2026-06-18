@@ -42,6 +42,41 @@ link-coroner rewrite path/to/repo --apply          # actually rewrite (with .bak
 - `certificates` — explicit alias of `pretty`.
 - `table` — compact table of every result (good for >100 URLs).
 - `json` — every result with the M3+ cause taxonomy (`ALIVE`, `NXDOMAIN`, `DNS_FAILURE`, `CONN_REFUSED`, `TLS_EXPIRED`, `TLS_ERROR`, `HTTP_4XX`, `HTTP_5XX`, `TIMEOUT`, `REDIRECT_LOOP`, `SOFT_404`, `PARKED`, `BAD_URL`, `UNKNOWN`).
+- `junit` — JUnit XML; deceased URLs become `<failure>`, suspicious become `<error>`. Drop straight into Jenkins/GitHub/GitLab test reporters.
+- `sarif` — SARIF 2.1.0 JSON for GitHub code scanning and other dashboards. Each cause is a `ruleId`.
+
+Use `--output FILE` (`-o`) to write any format to a file instead of stdout — handy for CI artifacts:
+```bash
+link-coroner autopsy . --format sarif -o link-coroner.sarif
+link-coroner autopsy docs --format junit -o reports/links.xml
+```
+
+## CI integrations (M6)
+
+### GitHub Action
+A composite action lives at the repo root. Drop it into a workflow:
+```yaml
+- uses: rwrife/link-coroner@main
+  with:
+    path: .
+    format: sarif
+    output: link-coroner.sarif
+    fail-on: dead
+- uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: link-coroner.sarif
+```
+
+### Pre-commit hook
+Add to `.pre-commit-config.yaml`:
+```yaml
+repos:
+  - repo: https://github.com/rwrife/link-coroner
+    rev: main
+    hooks:
+      - id: link-coroner
+```
+The hook runs `link-coroner autopsy .` with `--fail-on dead`.
 
 ### Suspicious 200s (M4)
 A URL that returns 200 isn't automatically alive. `link-coroner` sniffs HTML

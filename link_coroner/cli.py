@@ -12,6 +12,8 @@ from . import __version__
 from .diagnosis import exit_code_for
 from .forensics.probe import ProbeConfig, Verdict, probe_urls
 from .reporting.autopsy import render_certificates, render_json, render_pretty
+from .reporting.junit_out import render_junit
+from .reporting.sarif_out import render_sarif
 from .rewrite import rewrite_files
 from .scanner.extractors import extract_urls
 from .scanner.walker import walk_paths
@@ -87,6 +89,16 @@ def scan(
     )
 
 
+def _emit(payload: str, output_file: Path | None) -> None:
+    """Write a serialized report to ``output_file`` or stdout."""
+    if output_file is None:
+        typer.echo(payload)
+        return
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text(payload, encoding="utf-8")
+    console.print(f"[dim]wrote report → {output_file}[/dim]")
+
+
 def _collect_urls(path: Path) -> list[str]:
     seen: set[str] = set()
     ordered: list[str] = []
@@ -119,6 +131,12 @@ def autopsy(
     per_host: int = typer.Option(4, "--per-host", min=1, max=64),
     timeout: float = typer.Option(10.0, "--timeout", min=0.1),
     output: str = typer.Option("pretty", "--format", "-f", case_sensitive=False),
+    output_file: Path | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Write report to this file instead of stdout (great for CI artifacts).",
+    ),
     fail_on_dead: bool = typer.Option(
         True,
         "--fail-on-dead/--no-fail-on-dead",
@@ -138,9 +156,9 @@ def autopsy(
 ) -> None:
     """Walk PATH, probe every URL, and verdict each as ALIVE/DEAD/UNREACHABLE."""
     fmt = output.lower()
-    if fmt not in {"pretty", "json", "certificates", "table"}:
+    if fmt not in {"pretty", "json", "certificates", "table", "junit", "sarif"}:
         raise typer.BadParameter(
-            "--format must be one of: pretty, certificates, table, json"
+            "--format must be one of: pretty, certificates, table, json, junit, sarif"
         )
     fail_on_norm = fail_on.lower()
     if fail_on_norm not in {"dead", "suspicious", "never"}:
@@ -149,7 +167,11 @@ def autopsy(
     urls = _collect_urls(path)
     if not urls:
         if fmt == "json":
-            typer.echo("[]")
+            _emit("[]", output_file)
+        elif fmt == "junit":
+            _emit(render_junit([]), output_file)
+        elif fmt == "sarif":
+            _emit(render_sarif([]), output_file)
         else:
             console.print("[dim]No URLs found — nothing to autopsy.[/dim]")
         raise typer.Exit(0)
@@ -168,7 +190,12 @@ def autopsy(
             snapshots = asyncio.run(resurrect_many(dead_urls))
 
     if fmt == "json":
-        typer.echo(render_json(results, snapshots=snapshots))
+        payload = render_json(results, snapshots=snapshots)
+        _emit(payload, output_file)
+    elif fmt == "junit":
+        _emit(render_junit(results), output_file)
+    elif fmt == "sarif":
+        _emit(render_sarif(results), output_file)
     elif fmt == "table":
         render_pretty(results, console)
     else:
