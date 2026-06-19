@@ -11,6 +11,7 @@ from rich.console import Console
 from . import __version__
 from .diagnosis import exit_code_for
 from .forensics.probe import ProbeConfig, Verdict, probe_urls
+from .personas import PERSONAS, get_persona, list_personas
 from .reporting.autopsy import render_certificates, render_json, render_pretty
 from .reporting.junit_out import render_junit
 from .reporting.sarif_out import render_sarif
@@ -153,6 +154,13 @@ def autopsy(
         "--resurrect/--no-resurrect",
         help="Query the Wayback Machine for each deceased URL and add a resurrect link.",
     ),
+    persona: str = typer.Option(
+        "coroner",
+        "--persona",
+        "-p",
+        case_sensitive=False,
+        help="Narrator voice for certificates: " + ", ".join(sorted(PERSONAS)) + ".",
+    ),
 ) -> None:
     """Walk PATH, probe every URL, and verdict each as ALIVE/DEAD/UNREACHABLE."""
     fmt = output.lower()
@@ -163,6 +171,11 @@ def autopsy(
     fail_on_norm = fail_on.lower()
     if fail_on_norm not in {"dead", "suspicious", "never"}:
         raise typer.BadParameter("--fail-on must be one of: dead, suspicious, never")
+
+    try:
+        persona_obj = get_persona(persona)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
     urls = _collect_urls(path)
     if not urls:
@@ -190,7 +203,7 @@ def autopsy(
             snapshots = asyncio.run(resurrect_many(dead_urls))
 
     if fmt == "json":
-        payload = render_json(results, snapshots=snapshots)
+        payload = render_json(results, snapshots=snapshots, persona=persona_obj)
         _emit(payload, output_file)
     elif fmt == "junit":
         _emit(render_junit(results), output_file)
@@ -200,7 +213,7 @@ def autopsy(
         render_pretty(results, console)
     else:
         # "pretty" now means certificates (M3); "certificates" is the explicit alias.
-        render_certificates(results, console, snapshots=snapshots)
+        render_certificates(results, console, snapshots=snapshots, persona=persona_obj)
 
     if fail_on_norm == "never":
         raise typer.Exit(0)
@@ -270,6 +283,14 @@ def rewrite(
     if result.dry_run:
         console.print("\n[dim]Re-run with --apply to actually patch files.[/dim]")
     raise typer.Exit(0)
+
+
+@app.command("personas")
+def personas_cmd() -> None:
+    """List available narrator personas for the death-certificate report."""
+    for p in list_personas():
+        marker = " (default)" if p.name == "coroner" else ""
+        console.print(f"[bold cyan]{p.name}[/bold cyan]{marker} — {p.description}")
 
 
 if __name__ == "__main__":  # pragma: no cover
