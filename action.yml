@@ -1,0 +1,84 @@
+name: 'link-coroner'
+description: 'Forensic autopsy for the dead links rotting inside your repo.'
+author: 'rwrife'
+branding:
+  icon: 'alert-triangle'
+  color: 'gray-dark'
+
+inputs:
+  path:
+    description: 'File or directory to scan.'
+    required: false
+    default: '.'
+  format:
+    description: 'Report format: pretty | json | junit | sarif | table.'
+    required: false
+    default: 'pretty'
+  output:
+    description: 'Optional file to write the report to (e.g. link-coroner.sarif).'
+    required: false
+    default: ''
+  fail-on:
+    description: 'Severity threshold for non-zero exit: dead | suspicious | never.'
+    required: false
+    default: 'dead'
+  concurrency:
+    description: 'Max concurrent probes.'
+    required: false
+    default: '16'
+  resurrect:
+    description: 'Query the Wayback Machine for deceased URLs (true|false).'
+    required: false
+    default: 'false'
+  python-version:
+    description: 'Python version to install.'
+    required: false
+    default: '3.12'
+  version:
+    description: 'link-coroner version spec to install (e.g. ==0.1.0). Empty = latest from this ref.'
+    required: false
+    default: ''
+
+outputs:
+  report-path:
+    description: 'Path to the written report (only set when "output" is provided).'
+    value: ${{ inputs.output }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install link-coroner
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ -n "${{ inputs.version }}" ]]; then
+          python -m pip install --upgrade pip
+          python -m pip install "link-coroner${{ inputs.version }}"
+        elif [[ -f "${{ github.action_path }}/pyproject.toml" ]]; then
+          python -m pip install --upgrade pip
+          python -m pip install "${{ github.action_path }}"
+        else
+          python -m pip install --upgrade pip
+          python -m pip install link-coroner
+        fi
+
+    - name: Run autopsy
+      shell: bash
+      run: |
+        set -euo pipefail
+        args=(autopsy "${{ inputs.path }}"
+              --format "${{ inputs.format }}"
+              --fail-on "${{ inputs.fail-on }}"
+              --concurrency "${{ inputs.concurrency }}")
+        if [[ -n "${{ inputs.output }}" ]]; then
+          args+=(--output "${{ inputs.output }}")
+        fi
+        if [[ "${{ inputs.resurrect }}" == "true" ]]; then
+          args+=(--resurrect)
+        fi
+        link-coroner "${args[@]}"

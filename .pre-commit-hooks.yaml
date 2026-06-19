@@ -1,0 +1,10 @@
+- id: link-coroner
+  name: link-coroner — autopsy dead URLs
+  description: Forensic check for dead links in markdown and source files.
+  entry: link-coroner
+  language: python
+  pass_filenames: false
+  always_run: true
+  args: [autopsy, ., --format, pretty, --fail-on, dead]
+  stages: [pre-commit, manual]
+  minimum_pre_commit_version: '3.0.0'
