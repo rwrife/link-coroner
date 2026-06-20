@@ -1,0 +1,221 @@
+"""Mortician auto-PR: resurrect dead links and open a pull request.
+
+The mortician takes the output of an autopsy + Wayback lookup and:
+
+1. Filters out URLs blocked by a "do not resurrect" policy (per-URL or per-host).
+2. Applies the rewrites to disk (optional ``--apply``).
+3. Optionally creates a git branch, commits the changes, pushes, and opens a
+   pull request via the ``gh`` CLI.
+
+The PR-creation step is intentionally pluggable (see ``runner``) so the
+behaviour is unit-testable without shelling out to git or GitHub.
+"""
+
+from __future__ import annotations
+
+import subprocess
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from pathlib import Path
+from urllib.parse import urlparse
+
+from .rewrite import RewriteResult
+from .wayback import WaybackSnapshot
+
+CommandRunner = Callable[[list[str]], "subprocess.CompletedProcess[str]"]
+
+
+@dataclass(slots=True, frozen=True)
+class MorticianPolicy:
+    """Rules for which URLs the mortician is allowed to resurrect.
+
+    - ``skip_urls`` — exact URL matches that should be left alone.
+    - ``skip_hosts`` — hostnames (and their subdomains) the mortician
+      must not touch.
+    """
+
+    skip_urls: frozenset[str] = field(default_factory=frozenset)
+    skip_hosts: frozenset[str] = field(default_factory=frozenset)
+
+    @classmethod
+    def empty(cls) -> MorticianPolicy:
+        return cls()
+
+    @classmethod
+    def from_file(cls, path: Path) -> MorticianPolicy:
+        """Parse a simple text policy file.
+
+        Format (one directive per line, ``#`` comments allowed)::
+
+            # leave this exact URL alone
+            https://example.com/important
+
+            # leave every URL on this host alone (subdomains included)
+            host: facebook.com
+        """
+        urls: set[str] = set()
+        hosts: set[str] = set()
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            lowered = line.lower()
+            if lowered.startswith("host:") or lowered.startswith("host "):
+                host = line.split(":", 1)[-1].strip().lower()
+                if host:
+                    hosts.add(host)
+                continue
+            urls.add(line)
+        return cls(skip_urls=frozenset(urls), skip_hosts=frozenset(hosts))
+
+    def allows(self, url: str) -> bool:
+        """Return True if the mortician may resurrect this URL."""
+        if url in self.skip_urls:
+            return False
+        try:
+            host = (urlparse(url).hostname or "").lower()
+        except ValueError:
+            return True
+        if not host:
+            return True
+        for blocked in self.skip_hosts:
+            if host == blocked or host.endswith("." + blocked):
+                return False
+        return True
+
+
+def filter_snapshots(
+    snapshots: Mapping[str, WaybackSnapshot],
+    policy: MorticianPolicy,
+) -> tuple[dict[str, WaybackSnapshot], list[str]]:
+    """Split ``snapshots`` into (kept, skipped-by-policy).
+
+    Returns a 2-tuple: the snapshots the mortician is allowed to use,
+    and the URLs that were filtered out by the policy. Snapshots that
+    have no ``snapshot_url`` are also dropped (you can't resurrect what
+    Wayback never archived) but are NOT reported as policy skips.
+    """
+    kept: dict[str, WaybackSnapshot] = {}
+    skipped: list[str] = []
+    for url, snap in snapshots.items():
+        if not policy.allows(url):
+            skipped.append(url)
+            continue
+        if not snap or not snap.snapshot_url:
+            continue
+        kept[url] = snap
+    return kept, skipped
+
+
+def build_pr_body(
+    result: RewriteResult,
+    *,
+    skipped_by_policy: list[str] | None = None,
+    no_snapshot: list[str] | None = None,
+) -> str:
+    """Compose a markdown PR body for the mortician's auto-PR."""
+    skipped_by_policy = skipped_by_policy or []
+    no_snapshot = no_snapshot or []
+
+    lines: list[str] = [
+        "## 🪦 Mortician auto-PR",
+        "",
+        "The link-coroner performed an autopsy and identified deceased URLs in "
+        "this repository. This PR replaces each with the closest available "
+        "snapshot from the Wayback Machine.",
+        "",
+        f"- **Files affected:** {result.files_modified}",
+        f"- **Replacements:** {len(result.changes)}",
+    ]
+
+    if result.changes:
+        lines.extend(["", "### Replacements", ""])
+        for ch in result.changes:
+            lines.append(
+                f"- `{ch.path}`: {ch.url} → {ch.replacement} ({ch.count}×)"
+            )
+
+    if skipped_by_policy:
+        lines.extend(["", "### Skipped (per allowlist policy)", ""])
+        for url in skipped_by_policy:
+            lines.append(f"- {url}")
+
+    if no_snapshot:
+        lines.extend(["", "### No Wayback snapshot available", ""])
+        for url in no_snapshot:
+            lines.append(f"- {url}")
+
+    lines.extend(["", "---", "_Generated by `link-coroner mortician`._"])
+    return "\n".join(lines)
+
+
+def _default_runner(repo_root: Path) -> CommandRunner:
+    def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            cmd,
+            cwd=repo_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    return _run
+
+
+@dataclass(slots=True)
+class PROpenResult:
+    branch: str
+    title: str
+    body: str
+    pr_url: str | None
+    pushed: bool
+
+
+def open_pull_request(
+    repo_root: Path,
+    *,
+    branch: str,
+    title: str,
+    body: str,
+    base: str = "main",
+    runner: CommandRunner | None = None,
+) -> PROpenResult:
+    """Create a branch, commit local changes, push, and open a PR via ``gh``.
+
+    This function assumes the working tree already contains the rewrites
+    (i.e. the caller invoked :func:`link_coroner.rewrite.rewrite_files`
+    with ``dry_run=False`` first).
+
+    The ``runner`` parameter is the injection seam used by tests so they
+    can verify the exact command sequence without touching git or
+    GitHub.
+    """
+    run = runner or _default_runner(repo_root)
+
+    run(["git", "checkout", "-b", branch])
+    run(["git", "add", "-A"])
+    run(["git", "commit", "-m", title])
+    run(["git", "push", "-u", "origin", branch])
+    result = run(
+        [
+            "gh",
+            "pr",
+            "create",
+            "--base",
+            base,
+            "--head",
+            branch,
+            "--title",
+            title,
+            "--body",
+            body,
+        ]
+    )
+    pr_url = (result.stdout or "").strip() or None
+    return PROpenResult(
+        branch=branch,
+        title=title,
+        body=body,
+        pr_url=pr_url,
+        pushed=True,
+    )

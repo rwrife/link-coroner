@@ -35,6 +35,8 @@ link-coroner autopsy . --concurrency 32 --per-host 8 --timeout 5
 link-coroner autopsy . --resurrect                # add Wayback snapshot links
 link-coroner rewrite path/to/repo                 # dry-run patch dead URLs
 link-coroner rewrite path/to/repo --apply          # actually rewrite (with .bak)
+link-coroner mortician path/to/repo                # dry-run resurrection report
+link-coroner mortician path/to/repo --apply --open-pr  # patch + open auto-PR
 ```
 
 ### Output formats
@@ -96,6 +98,27 @@ The `rewrite` command goes further: it probes URLs, asks Wayback for
 snapshots, and patches the dead ones in place. Dry-run by default; pass
 `--apply` to actually overwrite files (a `.bak` sibling is written for
 each touched file unless you pass `--no-backup`).
+
+### Mortician auto-PR (issue #8)
+The `mortician` command is `rewrite` + an opinionated CI workflow. It
+respects a `--policy` allowlist (per-URL or per-host) and, with
+`--open-pr`, creates a branch, commits the resurrections, pushes, and
+opens a pull request via `gh`. The PR body itemises every replacement
+plus URLs that were skipped (policy) or had no Wayback snapshot.
+
+```bash
+link-coroner mortician . --policy .link-coroner-allowlist --apply --open-pr
+```
+
+Policy file format (one directive per line, `#` comments allowed):
+
+```
+# leave this exact URL alone
+https://important.example/keep-me
+
+# leave every URL on this host (and its subdomains) alone
+host: facebook.com
+```
 
 ### Exit codes
 - `--fail-on dead` (default) — exit 1 if any URL is `DEAD`.
