@@ -22,6 +22,7 @@ from rich.text import Text
 
 from ..diagnosis import Cause, cause_blurb, diagnose
 from ..forensics.probe import ProbeResult, Verdict
+from ..personas import Persona, get_persona
 from ..wayback import WaybackSnapshot
 
 _VERDICT_STYLES = {
@@ -81,7 +82,9 @@ def _certificate_for(
     *,
     now: datetime | None = None,
     snapshot: WaybackSnapshot | None = None,
+    persona: Persona | None = None,
 ) -> Panel:
+    persona = persona or get_persona(None)
     cause = diagnose(result)
     glyph = _CAUSE_GLYPH.get(cause, "🪦")
     style = _VERDICT_STYLES.get(result.verdict, "white")
@@ -95,7 +98,7 @@ def _certificate_for(
     body.append("Cause:         ", style="bold")
     body.append(f"{cause.value}\n", style=style)
     body.append("Notes:         ", style="bold")
-    body.append(f"{cause_blurb(cause)}\n", style="italic")
+    body.append(f"{persona.blurb(cause)}\n", style="italic")
     body.append("HTTP status:   ", style="bold")
     body.append(f"{result.status_code if result.status_code is not None else '—'}\n")
     body.append("Probe latency: ", style="bold")
@@ -117,9 +120,11 @@ def _certificate_for(
         body.append("\nResurrect at:  ", style="bold")
         body.append(f"{snapshot.snapshot_url}", style="cyan")
 
-    title = f"{glyph}  CERTIFICATE OF DEATH"
+    title = f"{glyph}  {persona.certificate_title}"
     if result.verdict is Verdict.UNREACHABLE:
-        title = f"{glyph}  PRESUMED DEAD"
+        title = f"{glyph}  {persona.presumed_title}"
+    if persona.name != "coroner":
+        title = f"{title}  ·  {persona.name}"
     return Panel(
         body,
         title=f"[{style}]{title}[/{style}]",
@@ -128,7 +133,13 @@ def _certificate_for(
     )
 
 
-def _print_summary(results: list[ProbeResult], console: Console) -> None:
+def _print_summary(
+    results: list[ProbeResult],
+    console: Console,
+    *,
+    persona: Persona | None = None,
+) -> None:
+    persona = persona or get_persona(None)
     counts: dict[str, int] = {v.value: 0 for v in Verdict}
     for r in results:
         counts[r.verdict.value] += 1
@@ -140,7 +151,7 @@ def _print_summary(results: list[ProbeResult], console: Console) -> None:
                 ("DEAD: ", "bold"), (f"{counts['DEAD']}  ", "red"),
                 ("SUSPICIOUS: ", "bold"), (f"{suspicious}", "yellow"),
             ),
-            title="🪦 autopsy summary",
+            title=persona.summary_title,
             border_style="bold",
         )
     )
@@ -151,34 +162,49 @@ def render_certificates(
     console: Console,
     *,
     snapshots: dict[str, WaybackSnapshot] | None = None,
+    persona: Persona | str | None = None,
 ) -> None:
     """Render a death-certificate panel for each non-ALIVE result, plus a summary."""
+    persona_obj = persona if isinstance(persona, Persona) else get_persona(persona)
     results = list(results)
     deceased = [r for r in results if r.verdict is not Verdict.ALIVE]
     snapshots = snapshots or {}
 
     if deceased:
         console.print(
-            Group(*[_certificate_for(r, snapshot=snapshots.get(r.url)) for r in deceased])
+            Group(
+                *[
+                    _certificate_for(r, snapshot=snapshots.get(r.url), persona=persona_obj)
+                    for r in deceased
+                ]
+            )
         )
     else:
         console.print(
             Panel(
-                Text("All URLs are breathing. No certificates required. 🎉", style="green"),
+                Text(persona_obj.alive_message, style="green"),
                 title="🪦 link-coroner",
                 border_style="green",
             )
         )
 
-    _print_summary(results, console)
+    _print_summary(results, console, persona=persona_obj)
 
 
 def render_json(
     results: Iterable[ProbeResult],
     *,
     snapshots: dict[str, WaybackSnapshot] | None = None,
+    persona: Persona | str | None = None,
 ) -> str:
-    """JSON output, enriched with the M3 cause taxonomy and M5 resurrection data."""
+    """JSON output, enriched with the M3 cause taxonomy and M5 resurrection data.
+
+    If ``persona`` is supplied, each item gets a ``persona_blurb`` field with
+    the persona-flavored copy alongside the canonical ``cause_blurb``.
+    """
+    persona_obj = (
+        persona if isinstance(persona, Persona) else (get_persona(persona) if persona else None)
+    )
     snapshots = snapshots or {}
     payload = []
     for r in results:
@@ -186,6 +212,9 @@ def render_json(
         cause = diagnose(r)
         item["cause"] = cause.value
         item["cause_blurb"] = cause_blurb(cause)
+        if persona_obj is not None and persona_obj.name != "coroner":
+            item["persona"] = persona_obj.name
+            item["persona_blurb"] = persona_obj.blurb(cause)
         snap = snapshots.get(r.url)
         if snap and snap.snapshot_url:
             item["wayback"] = snap.to_dict()

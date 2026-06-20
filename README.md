@@ -102,6 +102,22 @@ each touched file unless you pass `--no-backup`).
 - `--fail-on suspicious` — exit 1 on `DEAD` _or_ `UNREACHABLE`.
 - `--fail-on never` (or `--no-fail-on-dead`) — always exit 0.
 
+### Personas
+Swap the narrator voice on every death certificate with `--persona`:
+
+```bash
+link-coroner autopsy ./docs --persona noir-detective
+link-coroner autopsy ./docs --persona victorian-doctor
+link-coroner autopsy ./docs --persona crime-scene-photographer
+link-coroner autopsy ./docs --persona deadpan-medical-examiner
+link-coroner personas   # list all available voices
+```
+
+The default `coroner` persona keeps the original, formal pathologist
+copy. JSON output adds a `persona`/`persona_blurb` field when a
+non-default persona is selected so downstream tools can render the
+flavored text alongside the canonical taxonomy.
+
 ## Why
 Existing link checkers print a status code and exit. `link-coroner` tells you _what killed it_, _when_, and _where the body is buried_ — with personality.
 
