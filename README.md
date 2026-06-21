@@ -120,6 +120,23 @@ https://important.example/keep-me
 host: facebook.com
 ```
 
+### Obituary digest webhook (issue #9)
+Post a short "newly deceased URLs since last run" digest to a Slack or
+Discord incoming webhook. State is persisted to a JSON file so each run
+only reports *new* casualties (and any URLs that came back from the
+dead).
+
+```bash
+link-coroner digest . \
+  --webhook-url "$SLACK_OR_DISCORD_WEBHOOK" \
+  --state-file .link-coroner-state.json
+```
+
+The provider is auto-detected from the webhook host (Slack vs. Discord);
+override with `--provider slack|discord`. Use `--dry-run` to print the
+JSON payload without sending it, or `--post-if-empty` to always send a
+heartbeat — perfect for a daily cron job.
+
 ### Exit codes
 - `--fail-on dead` (default) — exit 1 if any URL is `DEAD`.
 - `--fail-on suspicious` — exit 1 on `DEAD` _or_ `UNREACHABLE`.
