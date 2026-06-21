@@ -11,6 +11,12 @@ from rich.console import Console
 from . import __version__
 from .diagnosis import exit_code_for
 from .forensics.probe import ProbeConfig, Verdict, probe_urls
+from .mortician import (
+    MorticianPolicy,
+    build_pr_body,
+    filter_snapshots,
+    open_pull_request,
+)
 from .personas import PERSONAS, get_persona, list_personas
 from .reporting.autopsy import render_certificates, render_json, render_pretty
 from .reporting.junit_out import render_junit
@@ -282,6 +288,136 @@ def rewrite(
         console.print(f"  {ch.path}: {ch.url} → {ch.replacement} ({ch.count}x)")
     if result.dry_run:
         console.print("\n[dim]Re-run with --apply to actually patch files.[/dim]")
+    raise typer.Exit(0)
+
+
+@app.command()
+def mortician(
+    path: Path = typer.Argument(
+        Path("."),
+        exists=True,
+        file_okay=True,
+        dir_okay=True,
+        readable=True,
+        resolve_path=True,
+        help="File or directory to scan and patch.",
+    ),
+    concurrency: int = typer.Option(16, "--concurrency", "-c", min=1, max=256),
+    per_host: int = typer.Option(4, "--per-host", min=1, max=64),
+    timeout: float = typer.Option(10.0, "--timeout", min=0.1),
+    apply_changes: bool = typer.Option(
+        False,
+        "--apply/--dry-run",
+        help="Actually write the changes (and open a PR). Defaults to dry-run.",
+    ),
+    backup: bool = typer.Option(
+        False,
+        "--backup/--no-backup",
+        help="Write .bak siblings before overwriting (off by default in mortician mode "
+        "since changes are tracked by git).",
+    ),
+    policy_file: Path | None = typer.Option(
+        None,
+        "--policy",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Path to a 'do not resurrect' allowlist file.",
+    ),
+    open_pr: bool = typer.Option(
+        False,
+        "--open-pr/--no-open-pr",
+        help="After applying changes, create a branch, commit, push, and open a PR via gh.",
+    ),
+    branch: str = typer.Option(
+        "mortician/auto-resurrect",
+        "--branch",
+        help="Branch name to use when --open-pr is set.",
+    ),
+    base: str = typer.Option(
+        "main",
+        "--base",
+        help="Base branch for the PR.",
+    ),
+    pr_title: str = typer.Option(
+        "🪬Mortician auto-PR: resurrect dead links",
+        "--pr-title",
+        help="Title for the auto-PR.",
+    ),
+) -> None:
+    """Resurrect dead URLs and optionally open a pull request.
+
+    This is the convenience entry-point used by CI: scan, autopsy,
+    fetch Wayback snapshots, filter by policy, rewrite files, and (with
+    ``--open-pr``) create a branch + PR.
+    """
+    policy = MorticianPolicy.from_file(policy_file) if policy_file else MorticianPolicy.empty()
+
+    urls = _collect_urls(path)
+    if not urls:
+        console.print("[dim]No URLs found — nothing to resurrect.[/dim]")
+        raise typer.Exit(0)
+
+    cfg = ProbeConfig(
+        concurrency=concurrency,
+        per_host_concurrency=per_host,
+        timeout=timeout,
+    )
+    results = asyncio.run(probe_urls(urls, config=cfg))
+    dead_urls = [r.url for r in results if r.verdict is not Verdict.ALIVE]
+    if not dead_urls:
+        console.print("[green]No deceased URLs detected — mortician is idle.[/green]")
+        raise typer.Exit(0)
+
+    snapshots = asyncio.run(resurrect_many(dead_urls, include_time_of_death=False))
+    kept, skipped = filter_snapshots(snapshots, policy)
+    no_snapshot = [
+        url for url in dead_urls
+        if url not in skipped and (url not in snapshots or not snapshots[url].snapshot_url)
+    ]
+
+    if not kept:
+        console.print(
+            "[yellow]Nothing to do: every dead URL is either policy-blocked "
+            "or has no Wayback snapshot.[/yellow]"
+        )
+        raise typer.Exit(0)
+
+    result = rewrite_files(path, kept, dry_run=not apply_changes, backup=backup)
+    body = build_pr_body(result, skipped_by_policy=skipped, no_snapshot=no_snapshot)
+
+    mode = "DRY-RUN" if result.dry_run else "APPLIED"
+    console.print(f"[bold]{mode}[/bold]: {result.files_modified} file(s) affected")
+    for ch in result.changes:
+        console.print(f"  {ch.path}: {ch.url} → {ch.replacement} ({ch.count}x)")
+    if skipped:
+        console.print(f"[yellow]Skipped {len(skipped)} URL(s) per policy.[/yellow]")
+    if no_snapshot:
+        console.print(
+            f"[yellow]{len(no_snapshot)} URL(s) had no Wayback snapshot available.[/yellow]"
+        )
+
+    if result.dry_run:
+        console.print(
+            "\n[dim]Re-run with --apply to patch files"
+            " (and --open-pr to open a pull request).[/dim]"
+        )
+        raise typer.Exit(0)
+
+    if open_pr:
+        pr = open_pull_request(
+            path if path.is_dir() else path.parent,
+            branch=branch,
+            title=pr_title,
+            body=body,
+            base=base,
+        )
+        if pr.pr_url:
+            console.print(f"[green]Opened PR:[/green] {pr.pr_url}")
+        else:
+            console.print(f"[green]Pushed branch[/green] {pr.branch} — PR creation result returned no URL.")
+
     raise typer.Exit(0)
 
 
