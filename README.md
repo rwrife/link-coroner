@@ -142,6 +142,26 @@ heartbeat — perfect for a daily cron job.
 - `--fail-on suspicious` — exit 1 on `DEAD` _or_ `UNREACHABLE`.
 - `--fail-on never` (or `--no-fail-on-dead`) — always exit 0.
 
+### MCP server (issue #10)
+
+Expose link-coroner to AI agents over the Model Context Protocol so they
+can ask "is this URL alive, and what should I cite instead?" inline
+while generating text.
+
+```bash
+link-coroner mcp   # speaks line-delimited JSON-RPC 2.0 on stdio
+```
+
+Tools advertised:
+
+- `autopsy_url` — verdict + cause of death for a single URL.
+- `autopsy_urls` — batch autopsy with one verdict per URL.
+- `find_replacement` — Wayback Machine snapshot suggestion for a dead URL.
+
+Wire it into any MCP-capable client (Claude Desktop, Continue,
+openclaw, etc.) by pointing at the `link-coroner mcp` command as a
+stdio server.
+
 ### Personas
 Swap the narrator voice on every death certificate with `--persona`:
 
