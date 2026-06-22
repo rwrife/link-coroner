@@ -21,6 +21,14 @@ from .personas import PERSONAS, get_persona, list_personas
 from .reporting.autopsy import render_certificates, render_json, render_pretty
 from .reporting.junit_out import render_junit
 from .reporting.sarif_out import render_sarif
+from .reporting.webhook import (
+    build_digest,
+    detect_provider,
+    load_state,
+    post_digest,
+    render_payload,
+    save_state,
+)
 from .rewrite import rewrite_files
 from .scanner.extractors import extract_urls
 from .scanner.walker import walk_paths
@@ -419,6 +427,115 @@ def mortician(
             console.print(f"[green]Pushed branch[/green] {pr.branch} — PR creation result returned no URL.")
 
     raise typer.Exit(0)
+
+
+@app.command()
+def digest(
+    path: Path = typer.Argument(
+        Path("."),
+        exists=True,
+        file_okay=True,
+        dir_okay=True,
+        readable=True,
+        resolve_path=True,
+        help="File or directory to scan.",
+    ),
+    webhook_url: str = typer.Option(
+        ...,
+        "--webhook-url",
+        envvar="LINK_CORONER_WEBHOOK_URL",
+        help="Slack or Discord incoming-webhook URL.",
+    ),
+    provider: str = typer.Option(
+        "auto",
+        "--provider",
+        case_sensitive=False,
+        help="Webhook provider: auto | slack | discord.",
+    ),
+    state_file: Path = typer.Option(
+        Path(".link-coroner-state.json"),
+        "--state-file",
+        help="Where to persist the set of known-dead URLs between runs.",
+    ),
+    concurrency: int = typer.Option(16, "--concurrency", "-c", min=1, max=256),
+    per_host: int = typer.Option(4, "--per-host", min=1, max=64),
+    timeout: float = typer.Option(10.0, "--timeout", min=0.1),
+    resurrect: bool = typer.Option(
+        True,
+        "--resurrect/--no-resurrect",
+        help="Include a Wayback snapshot link for each newly-deceased URL.",
+    ),
+    max_entries: int = typer.Option(
+        20, "--max-entries", min=1, max=200, help="Max URLs listed per section."
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Build and print the payload without sending it."
+    ),
+    post_if_empty: bool = typer.Option(
+        False,
+        "--post-if-empty/--skip-if-empty",
+        help="Send a 'nothing new' message even when there are no changes.",
+    ),
+) -> None:
+    """Scan PATH and POST a 'newly-deceased links' digest to a Slack/Discord webhook."""
+    prov = provider.lower()
+    if prov == "auto":
+        prov = detect_provider(webhook_url)
+    if prov not in {"slack", "discord"}:
+        raise typer.BadParameter("--provider must be one of: auto, slack, discord")
+
+    urls = _collect_urls(path)
+    if not urls:
+        console.print("[dim]No URLs found — skipping digest.[/dim]")
+        raise typer.Exit(0)
+
+    cfg = ProbeConfig(
+        concurrency=concurrency,
+        per_host_concurrency=per_host,
+        timeout=timeout,
+    )
+    results = asyncio.run(probe_urls(urls, config=cfg))
+
+    previous = load_state(state_file)
+    snapshots: dict = {}
+    new_dead_urls = [
+        r.url for r in results if r.verdict is not Verdict.ALIVE and r.url not in previous
+    ]
+    if resurrect and new_dead_urls:
+        snapshots = asyncio.run(resurrect_many(new_dead_urls, include_time_of_death=False))
+
+    digest_obj = build_digest(results, previous_dead=previous, snapshots=snapshots)
+
+    if digest_obj.is_empty and not post_if_empty:
+        console.print("[green]No new obituaries since last run — skipping webhook.[/green]")
+        # Still rewrite state so old entries that resolved get cleared out.
+        current_dead = [r.url for r in results if r.verdict is not Verdict.ALIVE]
+        save_state(state_file, current_dead)
+        raise typer.Exit(0)
+
+    payload = render_payload(digest_obj, prov, max_entries=max_entries)
+
+    if dry_run:
+        import json as _json
+
+        typer.echo(_json.dumps(payload, indent=2))
+        raise typer.Exit(0)
+
+    resp = post_digest(webhook_url, payload, timeout=timeout)
+    if 200 <= resp.status_code < 300:
+        console.print(
+            f"[green]Posted obituary digest[/green]: "
+            f"{len(digest_obj.newly_deceased)} new, "
+            f"{len(digest_obj.resurrected)} resurrected."
+        )
+        current_dead = [r.url for r in results if r.verdict is not Verdict.ALIVE]
+        save_state(state_file, current_dead)
+        raise typer.Exit(0)
+
+    console.print(
+        f"[red]Webhook POST failed[/red]: HTTP {resp.status_code} — {resp.body[:200]}"
+    )
+    raise typer.Exit(1)
 
 
 @app.command("personas")
