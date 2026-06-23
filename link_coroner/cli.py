@@ -538,6 +538,17 @@ def digest(
     raise typer.Exit(1)
 
 
+@app.command("mcp")
+def mcp_cmd() -> None:
+    """Run the MCP server over stdio so AI agents can autopsy URLs inline."""
+    from .mcp_server import run_stdio
+
+    try:
+        asyncio.run(run_stdio())
+    except KeyboardInterrupt:  # pragma: no cover
+        raise typer.Exit(0) from None
+
+
 @app.command("personas")
 def personas_cmd() -> None:
     """List available narrator personas for the death-certificate report."""
