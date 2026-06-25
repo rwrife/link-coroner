@@ -31,6 +31,7 @@ from .reporting.webhook import (
 )
 from .rewrite import rewrite_files
 from .scanner.extractors import extract_urls
+from .scanner.site import discover_site
 from .scanner.walker import walk_paths
 from .wayback import resurrect_many
 
@@ -66,14 +67,19 @@ def main(
 
 @app.command()
 def scan(
-    path: Path = typer.Argument(
-        Path("."),
+    path: Path | None = typer.Argument(
+        None,
         exists=True,
         file_okay=True,
         dir_okay=True,
         readable=True,
         resolve_path=True,
-        help="File or directory to scan.",
+        help="File or directory to scan (omit when using --site).",
+    ),
+    site: str | None = typer.Option(
+        None,
+        "--site",
+        help="Crawl a live site via sitemap.xml (with homepage fallback) instead of a path.",
     ),
     unique: bool = typer.Option(
         True,
@@ -81,7 +87,35 @@ def scan(
         help="Deduplicate URLs across files.",
     ),
 ) -> None:
-    """Walk PATH and print every URL we'd autopsy (no probing yet — M1)."""
+    """List every URL link-coroner would autopsy.
+
+    Either provide a filesystem PATH or pass ``--site https://...`` to
+    discover URLs from a deployed site's sitemap.xml + robots.txt (with
+    one-hop homepage fallback if no sitemap is available).
+    """
+    if site and path is not None:
+        raise typer.BadParameter("pass either PATH or --site, not both.")
+    if site is None and path is None:
+        path = Path(".").resolve()
+
+    if site:
+        discovery = asyncio.run(discover_site(site))
+        for url in discovery.urls:
+            console.print(url)
+        origin = (
+            f"homepage fallback at {site}" if discovery.used_fallback else f"sitemap at {site}"
+        )
+        if discovery.robots.disallowed:
+            console.print(
+                f"[dim]robots.txt: {len(discovery.robots.disallowed)} Disallow rule(s) applied[/dim]"
+            )
+        console.print(
+            f"\n[bold]🪦 link-coroner[/bold]: found [cyan]{len(discovery.urls)}[/cyan] URL(s) "
+            f"from [cyan]{origin}[/cyan]."
+        )
+        raise typer.Exit(0)
+
+    assert path is not None  # noqa: S101 — narrowing for type checkers
     seen: set[str] = set()
     total = 0
     for file_path in walk_paths(path):
@@ -133,14 +167,19 @@ def _collect_urls(path: Path) -> list[str]:
 
 @app.command()
 def autopsy(
-    path: Path = typer.Argument(
-        Path("."),
+    path: Path | None = typer.Argument(
+        None,
         exists=True,
         file_okay=True,
         dir_okay=True,
         readable=True,
         resolve_path=True,
-        help="File or directory to scan.",
+        help="File or directory to scan (omit when using --site).",
+    ),
+    site: str | None = typer.Option(
+        None,
+        "--site",
+        help="Autopsy URLs discovered from a live site's sitemap.xml (+ robots.txt).",
     ),
     concurrency: int = typer.Option(16, "--concurrency", "-c", min=1, max=256),
     per_host: int = typer.Option(4, "--per-host", min=1, max=64),
@@ -191,7 +230,21 @@ def autopsy(
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
-    urls = _collect_urls(path)
+    if site and path is not None:
+        raise typer.BadParameter("pass either PATH or --site, not both.")
+    if site is None and path is None:
+        path = Path(".").resolve()
+
+    if site:
+        discovery = asyncio.run(discover_site(site))
+        urls = discovery.urls
+        if discovery.robots.disallowed:
+            console.print(
+                f"[dim]robots.txt: {len(discovery.robots.disallowed)} Disallow rule(s) applied[/dim]"
+            )
+    else:
+        assert path is not None  # noqa: S101
+        urls = _collect_urls(path)
     if not urls:
         if fmt == "json":
             _emit("[]", output_file)

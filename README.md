@@ -27,6 +27,8 @@ uv venv && uv pip install -e ".[dev]"
 ```bash
 link-coroner --version
 link-coroner scan path/to/repo                # list URLs only
+link-coroner scan --site https://example.com   # discover URLs via sitemap.xml + robots.txt
+link-coroner autopsy --site https://example.com  # autopsy a live deployment
 link-coroner autopsy path/to/repo              # probe + render death certificates
 link-coroner autopsy . --format table          # compact table view (M2-style)
 link-coroner autopsy . --format json           # machine-readable, includes cause + blurb
