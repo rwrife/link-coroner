@@ -122,6 +122,49 @@ https://important.example/keep-me
 host: facebook.com
 ```
 
+### Link-rot heatmap (issue #22)
+Track how your repo decays over time. Feed the SQLite cache from
+scheduled `autopsy` runs, then render a calendar/heatmap of when links
+died and which directories rot the fastest.
+
+```bash
+# 1. populate history (e.g. via nightly CI)
+link-coroner autopsy . --cache .link-coroner-cache.sqlite --no-fail-on-dead
+
+# 2. render a terminal heatmap of the last 90 days
+link-coroner heatmap --cache .link-coroner-cache.sqlite
+
+# 3. export an SVG/HTML report for your docs site or CI artifacts
+link-coroner heatmap --format html --output rot.html --since 180d
+```
+
+Sample ANSI output:
+
+```
+link-rot heatmap  (2026-03-27 → 2026-06-25)
+
+path        04-06 04-13 04-20 04-27 05-04 05-11 05-18 05-25 06-01 06-08 06-15 06-22
+----------------------------------------------------------------------------------
+docs/       ▒▒▒▒▒ ▒▒▒▒▒ ▓▓▓▓▓ ▓▓▓▓▓ █████ ▒▒▒▒▒ ▓▓▓▓▓ ▒▒▒▒▒ ····· ····· ▒▒▒▒▒ ▒▒▒▒▒
+src/cli/    ····· ····· ▒▒▒▒▒ ····· ····· ▓▓▓▓▓ ····· ····· ····· ····· ····· ·····
+
+legend: ' '   ···   ░░░   ▒▒▒   ▓▓▓   ███    (0 → ≥5 deaths/week)
+
+total deaths: 27
+top rotting paths:
+    19  docs/
+     6  src/cli/
+     2  examples/
+worst hosts (MTBF, days/death):
+    7.5d  blog.dead-startup.com
+   14.0d  old-cdn.example.net
+```
+
+Use `--since 24h|90d|12w` to change the window, `--path-depth N` to
+bucket finer (default 2 segments), and `--no-color` for plain text. The
+SVG/HTML exports embed inline tooltips so they drop straight into a
+docs site or GitHub Pages artifact.
+
 ### Obituary digest webhook (issue #9)
 Post a short "newly deceased URLs since last run" digest to a Slack or
 Discord incoming webhook. State is persisted to a JSON file so each run

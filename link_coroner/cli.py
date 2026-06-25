@@ -9,8 +9,10 @@ import typer
 from rich.console import Console
 
 from . import __version__
+from .cache import ProbeCache
 from .diagnosis import exit_code_for
 from .forensics.probe import ProbeConfig, Verdict, probe_urls
+from .heatmap import build_grid, render_ansi, render_html, render_svg
 from .mortician import (
     MorticianPolicy,
     build_pr_body,
@@ -214,6 +216,11 @@ def autopsy(
         case_sensitive=False,
         help="Narrator voice for certificates: " + ", ".join(sorted(PERSONAS)) + ".",
     ),
+    cache_db: Path | None = typer.Option(
+        None,
+        "--cache",
+        help="Persist probe results to this SQLite cache (used by `link-coroner heatmap`).",
+    ),
 ) -> None:
     """Walk PATH, probe every URL, and verdict each as ALIVE/DEAD/UNREACHABLE."""
     fmt = output.lower()
@@ -262,6 +269,10 @@ def autopsy(
         timeout=timeout,
     )
     results = asyncio.run(probe_urls(urls, config=cfg))
+
+    if cache_db is not None:
+        with ProbeCache(cache_db) as cache:
+            cache.record_probe_results(results)
 
     snapshots = {}
     if resurrect:
@@ -608,6 +619,80 @@ def personas_cmd() -> None:
     for p in list_personas():
         marker = " (default)" if p.name == "coroner" else ""
         console.print(f"[bold cyan]{p.name}[/bold cyan]{marker} — {p.description}")
+
+
+def _parse_since(spec: str) -> int:
+    """Parse a duration spec like ``90d``/``12w``/``24h`` into a unix timestamp."""
+    import re
+    import time
+
+    spec = spec.strip().lower()
+    match = re.fullmatch(r"(\d+)([hdw])", spec)
+    if not match:
+        raise typer.BadParameter("--since must look like '24h', '90d', or '12w'.")
+    qty = int(match.group(1))
+    unit = match.group(2)
+    seconds = {"h": 3600, "d": 86400, "w": 604800}[unit] * qty
+    return int(time.time()) - seconds
+
+
+@app.command("heatmap")
+def heatmap_cmd(
+    cache_db: Path = typer.Option(
+        Path(".link-coroner-cache.sqlite"),
+        "--cache",
+        "--db",
+        help="SQLite probe-history cache (written by `autopsy --cache`).",
+    ),
+    output_format: str = typer.Option(
+        "ansi", "--format", "-f", case_sensitive=False,
+        help="Output format: ansi | svg | html.",
+    ),
+    since: str = typer.Option(
+        "90d", "--since",
+        help="How far back to aggregate (e.g. 24h, 90d, 12w). Default 90d.",
+    ),
+    output_file: Path | None = typer.Option(
+        None, "--output", "-o",
+        help="Write to this file instead of stdout (recommended for svg/html).",
+    ),
+    depth: int = typer.Option(
+        2, "--path-depth", min=1, max=8,
+        help="How many leading path segments to bucket files by (default 2).",
+    ),
+    no_color: bool = typer.Option(
+        False, "--no-color", help="Disable ANSI color in --format ansi.",
+    ),
+) -> None:
+    """Render a link-rot heatmap from cached probe history.
+
+    Run ``link-coroner autopsy --cache .link-coroner-cache.sqlite`` on a
+    schedule to feed this command. The default window is 90 days.
+    """
+    fmt = output_format.lower()
+    if fmt not in {"ansi", "svg", "html"}:
+        raise typer.BadParameter("--format must be one of: ansi, svg, html")
+    if not cache_db.exists():
+        console.print(
+            f"[yellow]cache not found:[/yellow] {cache_db}\n"
+            "Run `link-coroner autopsy --cache <path>` first to populate history."
+        )
+        raise typer.Exit(1)
+
+    since_ts = _parse_since(since)
+    with ProbeCache(cache_db) as cache:
+        events = cache.all_events(since=since_ts)
+    grid = build_grid(events, since_ts=since_ts, path_depth=depth)
+
+    if fmt == "ansi":
+        payload = render_ansi(grid, color=not no_color)
+    elif fmt == "svg":
+        payload = render_svg(grid)
+    else:
+        payload = render_html(grid)
+
+    _emit(payload, output_file)
+    raise typer.Exit(0)
 
 
 if __name__ == "__main__":  # pragma: no cover
