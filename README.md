@@ -187,6 +187,59 @@ heartbeat — perfect for a daily cron job.
 - `--fail-on suspicious` — exit 1 on `DEAD` _or_ `UNREACHABLE`.
 - `--fail-on never` (or `--no-fail-on-dead`) — always exit 0.
 
+### Editor integration (LSP)
+Underline dying links live while you write. `link-coroner lsp` speaks the
+Language Server Protocol over stdio, so any LSP-capable editor can wire it up.
+
+```bash
+link-coroner lsp                              # plain mode
+link-coroner lsp --cache .link-coroner.sqlite # share probe history with `heatmap`
+```
+
+Capabilities: push diagnostics (DEAD → Error, suspicious → Warning), hover
+cards with cause-of-death + Wayback suggestion, and a "Replace with Wayback
+snapshot" quick-fix code action.
+
+**VSCode** (`settings.json` with the [`generic-lsp-client`](https://marketplace.visualstudio.com/items?itemName=llllvvuu.llllvvuu-generic-lsp-client) extension or any custom client):
+
+```json
+{
+  "genericLspClient.servers": [
+    {
+      "id": "link-coroner",
+      "command": ["link-coroner", "lsp"],
+      "languages": ["markdown", "plaintext"]
+    }
+  ]
+}
+```
+
+**Neovim** (via [`nvim-lspconfig`](https://github.com/neovim/nvim-lspconfig) custom config):
+
+```lua
+local configs = require("lspconfig.configs")
+configs.link_coroner = {
+  default_config = {
+    cmd = { "link-coroner", "lsp" },
+    filetypes = { "markdown", "text" },
+    root_dir = require("lspconfig.util").root_pattern(".git", "."),
+  },
+}
+require("lspconfig").link_coroner.setup({})
+```
+
+**Helix** (`languages.toml`):
+
+```toml
+[[language]]
+name = "markdown"
+language-servers = ["link-coroner"]
+
+[language-server.link-coroner]
+command = "link-coroner"
+args = ["lsp"]
+```
+
 ### MCP server (issue #10)
 
 Expose link-coroner to AI agents over the Model Context Protocol so they

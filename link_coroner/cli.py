@@ -602,6 +602,27 @@ def digest(
     raise typer.Exit(1)
 
 
+@app.command("lsp")
+def lsp_cmd(
+    cache_db: Path | None = typer.Option(
+        None,
+        "--cache",
+        help="Optional SQLite probe-history cache to share with `link-coroner heatmap`.",
+    ),
+) -> None:
+    """Run the Language Server Protocol server over stdio.
+
+    Wire this into your editor to underline dying links live. See the
+    README's \"Editor integration\" section for VSCode + Neovim snippets.
+    """
+    from .lsp import run_stdio as run_lsp_stdio
+
+    try:
+        asyncio.run(run_lsp_stdio(cache_db=cache_db))
+    except KeyboardInterrupt:  # pragma: no cover
+        raise typer.Exit(0) from None
+
+
 @app.command("mcp")
 def mcp_cmd() -> None:
     """Run the MCP server over stdio so AI agents can autopsy URLs inline."""
