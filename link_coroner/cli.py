@@ -21,6 +21,14 @@ from .mortician import (
 )
 from .personas import PERSONAS, get_persona, list_personas
 from .reporting.autopsy import render_certificates, render_json, render_pretty
+from .reporting.badge import (
+    BadgeSummary,
+    color_for,
+    render_markdown,
+    render_shields_endpoint,
+    summarize,
+    summarize_from_json,
+)
 from .reporting.junit_out import render_junit
 from .reporting.sarif_out import render_sarif
 from .reporting.webhook import (
@@ -714,6 +722,98 @@ def heatmap_cmd(
 
     _emit(payload, output_file)
     raise typer.Exit(0)
+
+
+@app.command("badge")
+def badge_cmd(
+    output_format: str = typer.Option(
+        "svg",
+        "--format",
+        "-f",
+        case_sensitive=False,
+        help="Badge output: svg | shields-endpoint | markdown.",
+    ),
+    from_file: Path | None = typer.Option(
+        None,
+        "--from",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Read `link-coroner autopsy --format json` output instead of the cache.",
+    ),
+    cache_db: Path | None = typer.Option(
+        None,
+        "--cache",
+        help="SQLite probe cache (the file you passed to `autopsy --cache`).",
+    ),
+    label: str = typer.Option(
+        "link health",
+        "--label",
+        help="Left-hand label rendered on the badge.",
+    ),
+    endpoint_url: str | None = typer.Option(
+        None,
+        "--endpoint-url",
+        help="With --format markdown: produce a shields endpoint badge "
+        "pointing at this URL (e.g. a hosted link-coroner.json).",
+    ),
+    output_file: Path | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Write badge to this file instead of stdout.",
+    ),
+) -> None:
+    """Generate a README-ready link-health badge from autopsy results."""
+    fmt = output_format.lower()
+    if fmt not in {"svg", "shields-endpoint", "markdown"}:
+        raise typer.BadParameter(
+            "--format must be one of: svg, shields-endpoint, markdown"
+        )
+    if from_file is None and cache_db is None:
+        raise typer.BadParameter("pass either --from <results.json> or --cache <db>.")
+    if from_file is not None and cache_db is not None:
+        raise typer.BadParameter("pass --from OR --cache, not both.")
+
+    if from_file is not None:
+        summary = summarize_from_json(from_file.read_text(encoding="utf-8"))
+    else:
+        assert cache_db is not None  # noqa: S101
+        if not cache_db.exists():
+            console.print(
+                f"[yellow]cache not found:[/yellow] {cache_db}\n"
+                "Run `link-coroner autopsy --cache <path>` first to populate it."
+            )
+            raise typer.Exit(1)
+        # Use latest observation per URL so a freshly-fixed link stops
+        # counting as dead just because it died in some earlier run.
+        with ProbeCache(cache_db) as cache:
+            events = cache.all_events()
+        latest: dict[str, dict[str, str]] = {}
+        for ev in events:
+            latest[ev.url] = {"cause": ev.cause, "verdict": ev.verdict}
+        summary = summarize(latest.values())
+
+    color = color_for(summary)
+    message = summary.message
+
+    if fmt == "svg":
+        from .reporting.badge import render_svg as render_badge_svg
+
+        payload = render_badge_svg(label, message, color)
+    elif fmt == "shields-endpoint":
+        payload = render_shields_endpoint(label, message, color)
+    else:
+        payload = render_markdown(
+            label, message, color, endpoint_url=endpoint_url
+        )
+
+    _emit(payload, output_file)
+    raise typer.Exit(0)
+
+
+_ = BadgeSummary  # re-export hint for type-checkers / __all__ scrapers
 
 
 if __name__ == "__main__":  # pragma: no cover
