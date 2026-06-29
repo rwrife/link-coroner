@@ -772,9 +772,16 @@ def badge_cmd(
             "--format must be one of: svg, shields-endpoint, markdown"
         )
     if from_file is None and cache_db is None:
-        raise typer.BadParameter("pass either --from <results.json> or --cache <db>.")
+        # Use typer.echo (not BadParameter) so the flag names aren't
+        # truncated by Rich's panel renderer in narrow CI terminals.
+        typer.echo(
+            "Error: pass either --from <results.json> or --cache <db>.",
+            err=True,
+        )
+        raise typer.Exit(2)
     if from_file is not None and cache_db is not None:
-        raise typer.BadParameter("pass --from OR --cache, not both.")
+        typer.echo("Error: pass --from OR --cache, not both.", err=True)
+        raise typer.Exit(2)
 
     if from_file is not None:
         summary = summarize_from_json(from_file.read_text(encoding="utf-8"))
