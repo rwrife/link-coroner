@@ -55,6 +55,17 @@ link-coroner autopsy . --format sarif -o link-coroner.sarif
 link-coroner autopsy docs --format junit -o reports/links.xml
 ```
 
+### Time-machine diff (which links died between two revs)
+```
+link-coroner diff HEAD~1 HEAD                       # pretty terminal report
+link-coroner diff main feature-branch --format json # machine-readable
+link-coroner diff main HEAD --format markdown-comment | gh pr comment 42 --body-file -
+```
+Categorizes URLs into `NEW_DEAD`, `RESURRECTED`, `STILL_DEAD`, `NEW_ALIVE`, and
+`REMOVED`. Exits non-zero when a PR introduces fresh corpses; tune with
+`--fail-on new-dead|any-dead|never`. Uses `git worktree` under the hood so your
+working tree is never mutated.
+
 ## CI integrations (M6)
 
 ### GitHub Action

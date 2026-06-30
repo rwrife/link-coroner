@@ -9,6 +9,7 @@ import typer
 from rich.console import Console
 
 from . import __version__
+from . import diff as diff_mod
 from .cache import ProbeCache
 from .diagnosis import exit_code_for
 from .forensics.probe import ProbeConfig, Verdict, probe_urls
@@ -722,6 +723,83 @@ def heatmap_cmd(
 
     _emit(payload, output_file)
     raise typer.Exit(0)
+
+
+@app.command("diff")
+def diff_cmd(
+    base: str = typer.Argument(..., help="Base git revision (e.g. main, HEAD~1, a commit SHA)."),
+    head: str = typer.Argument(..., help="Head git revision to compare against base."),
+    repo: Path = typer.Option(
+        Path("."),
+        "--repo",
+        "-C",
+        help="Path to the git repository (defaults to current directory).",
+    ),
+    output_format: str = typer.Option(
+        "pretty",
+        "--format",
+        "-f",
+        case_sensitive=False,
+        help="Output format: pretty | json | markdown-comment.",
+    ),
+    output_file: Path | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Write the report to this file instead of stdout.",
+    ),
+    fail_on: str = typer.Option(
+        "new-dead",
+        "--fail-on",
+        case_sensitive=False,
+        help="Exit-code policy: new-dead (default) | any-dead | never.",
+    ),
+    concurrency: int = typer.Option(16, "--concurrency", "-c", min=1, max=256),
+    timeout: float = typer.Option(10.0, "--timeout", min=0.1),
+) -> None:
+    """Diff link health between two git revisions of REPO."""
+    fmt = output_format.lower()
+    if fmt not in {"pretty", "json", "markdown-comment"}:
+        typer.echo(
+            "Error: --format must be one of: pretty, json, markdown-comment",
+            err=True,
+        )
+        raise typer.Exit(2)
+    policy = fail_on.lower()
+    if policy not in {"new-dead", "any-dead", "never"}:
+        typer.echo(
+            "Error: --fail-on must be one of: new-dead, any-dead, never",
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    if not (repo / ".git").exists() and not (repo / "HEAD").exists():
+        typer.echo(f"Error: {repo} is not a git repository.", err=True)
+        raise typer.Exit(2)
+
+    def _scan(path: Path) -> list[str]:
+        return _collect_urls(path)
+
+    cfg = ProbeConfig(concurrency=concurrency, timeout=timeout)
+
+    def _probe(urls):
+        url_list = list(urls)
+        if not url_list:
+            return {}
+        results = asyncio.run(probe_urls(url_list, config=cfg))
+        return {r.url: r.verdict.value for r in results}
+
+    result = diff_mod.run_diff(repo, base, head, scan=_scan, probe=_probe)
+
+    if fmt == "json":
+        payload = diff_mod.render_json(result)
+    elif fmt == "markdown-comment":
+        payload = diff_mod.render_markdown_comment(result)
+    else:
+        payload = diff_mod.render_pretty(result)
+
+    _emit(payload, output_file)
+    raise typer.Exit(diff_mod.exit_code_for(result, fail_on=policy))  # type: ignore[arg-type]
 
 
 @app.command("badge")
