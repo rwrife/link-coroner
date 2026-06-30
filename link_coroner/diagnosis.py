@@ -32,6 +32,7 @@ class Cause(StrEnum):
     BAD_URL = "BAD_URL"
     SOFT_404 = "SOFT_404"
     PARKED = "PARKED"
+    QUARANTINE_BROKEN_OUT = "QUARANTINE_BROKEN_OUT"
     UNKNOWN = "UNKNOWN"
 
 
@@ -49,6 +50,7 @@ _CAUSE_BLURBS: dict[Cause, str] = {
     Cause.BAD_URL: "URL itself is malformed — dead on arrival.",
     Cause.SOFT_404: "Server says 200, but the page is a tombstone in disguise.",
     Cause.PARKED: "Domain has been parked or listed for sale — the body was stolen.",
+    Cause.QUARANTINE_BROKEN_OUT: "Quarantined URL has returned to life — the corpse sat up.",
     Cause.UNKNOWN: "Cause undetermined; further forensics required.",
 }
 
