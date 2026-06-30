@@ -260,6 +260,32 @@ Wire it into any MCP-capable client (Claude Desktop, Continue,
 openclaw, etc.) by pointing at the `link-coroner mcp` command as a
 stdio server.
 
+### README badge (issue #27)
+
+Generate a shields-style "🪦 link health" badge from your latest autopsy.
+Works from either a JSON results file or the SQLite cache (latest verdict
+per URL wins, so a fixed link stops counting as dead):
+
+```bash
+# 1. Scan and dump JSON (or use --cache .link-coroner-cache.sqlite).
+link-coroner autopsy --format json -o results.json
+
+# 2. Render a self-contained SVG for docs/links.svg.
+link-coroner badge --from results.json --format svg -o docs/links.svg
+
+# 3. Or emit shields.io endpoint JSON to host somewhere static.
+link-coroner badge --from results.json --format shields-endpoint \
+    -o docs/link-coroner.json
+
+# 4. Or grab a ready-to-paste Markdown snippet.
+link-coroner badge --from results.json --format markdown --label "link health"
+# → ![link health: 🪦 0 dead / 12 alive](https://img.shields.io/badge/...)
+```
+
+Colours follow worst-severity rules: **brightgreen** when nothing is dead
+or suspicious, **yellow** when only soft-404 / parked entries exist, and
+**red** the moment any link is fully deceased.
+
 ### Personas
 Swap the narrator voice on every death certificate with `--persona`:
 
