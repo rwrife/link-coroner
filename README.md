@@ -66,6 +66,36 @@ Categorizes URLs into `NEW_DEAD`, `RESURRECTED`, `STILL_DEAD`, `NEW_ALIVE`, and
 `--fail-on new-dead|any-dead|never`. Uses `git worktree` under the hood so your
 working tree is never mutated.
 
+### Quarantine known-dead links (`.coroner-ignore`)
+
+Vendors that 403 to bots, intranet hosts, `https://example.invalid` — list them
+in a `.gitignore`-style `.coroner-ignore` at the repo root and the coroner will
+stop yelling about them:
+
+```
+# .coroner-ignore
+https://example.invalid
+https://vendor.example.com/*  @ttl=30d   # re-check monthly
+*://intranet.local/*                      # never re-probe
+```
+
+- One URL or shell-style glob per line; `#` starts a comment.
+- Optional `@ttl=<duration>` (`s`/`m`/`h`/`d`/`w`) periodically re-probes the
+  URL. If a quarantined URL comes back to life it's reported as
+  **`QUARANTINE_BROKEN_OUT`** and fails the run.
+- Disable per-run with `link-coroner autopsy --no-ignore`, or point elsewhere
+  with `--ignore-file path/to/.coroner-ignore`.
+- TTL bookkeeping is stored next to the ignore file in
+  `.coroner-ignore.state.json` — commit it or `.gitignore` it, your call.
+
+Helper commands:
+
+```bash
+link-coroner ignore add https://example.invalid
+link-coroner ignore add 'https://vendor.example.com/*' --ttl 30d
+link-coroner ignore list
+```
+
 ## CI integrations (M6)
 
 ### GitHub Action

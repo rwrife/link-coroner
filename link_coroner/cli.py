@@ -14,6 +14,17 @@ from .cache import ProbeCache
 from .diagnosis import exit_code_for
 from .forensics.probe import ProbeConfig, Verdict, probe_urls
 from .heatmap import build_grid, render_ansi, render_html, render_svg
+from .ignore import (
+    DEFAULT_IGNORE_FILENAME,
+    DEFAULT_STATE_FILENAME,
+    IgnoreError,
+    append_ignore_entry,
+    classify_urls,
+    discover_ignore_file,
+    load_ignore_file,
+    load_ignore_state,
+    save_ignore_state,
+)
 from .mortician import (
     MorticianPolicy,
     build_pr_body,
@@ -230,6 +241,16 @@ def autopsy(
         "--cache",
         help="Persist probe results to this SQLite cache (used by `link-coroner heatmap`).",
     ),
+    ignore_file: Path | None = typer.Option(
+        None,
+        "--ignore-file",
+        help=f"Path to a {DEFAULT_IGNORE_FILENAME} quarantine file (defaults to one next to PATH).",
+    ),
+    no_ignore: bool = typer.Option(
+        False,
+        "--no-ignore",
+        help=f"Disable {DEFAULT_IGNORE_FILENAME} quarantine entirely.",
+    ),
 ) -> None:
     """Walk PATH, probe every URL, and verdict each as ALIVE/DEAD/UNREACHABLE."""
     fmt = output.lower()
@@ -261,7 +282,23 @@ def autopsy(
     else:
         assert path is not None  # noqa: S101
         urls = _collect_urls(path)
-    if not urls:
+
+    # Quarantine handling: split urls into to-probe vs skip-for-now.
+    ignore_obj = None
+    state_obj = None
+    quarantined: list = []
+    if not no_ignore:
+        ignore_path = ignore_file
+        if ignore_path is None and path is not None:
+            ignore_path = discover_ignore_file(path)
+        if ignore_path is not None:
+            ignore_obj = load_ignore_file(ignore_path)
+            state_path = ignore_path.with_name(DEFAULT_STATE_FILENAME)
+            state_obj = load_ignore_state(state_path)
+            if ignore_obj.rules:
+                urls, quarantined = classify_urls(urls, ignore_obj, state_obj)
+
+    if not urls and not quarantined:
         if fmt == "json":
             _emit("[]", output_file)
         elif fmt == "junit":
@@ -277,7 +314,50 @@ def autopsy(
         per_host_concurrency=per_host,
         timeout=timeout,
     )
-    results = asyncio.run(probe_urls(urls, config=cfg))
+    results = asyncio.run(probe_urls(urls, config=cfg)) if urls else []
+
+    # Apply quarantine after probing: any TTL-elapsed re-probe that came back
+    # ALIVE is a QUARANTINE_BROKEN_OUT; non-rechecked quarantined URLs become
+    # synthetic ALIVE-quarantine results that don't count toward failure.
+    if quarantined:
+        from .forensics.probe import ProbeResult as _PR
+
+        rechecked = {q.url for q in quarantined if q.recheck}
+        broken_out: list[str] = []
+        kept: list = []
+        for r in results:
+            if r.url in rechecked:
+                if r.verdict is Verdict.ALIVE:
+                    # Mark this result as a broken-out quarantine via reason.
+                    r.reason = "QUARANTINE_BROKEN_OUT"
+                    broken_out.append(r.url)
+            kept.append(r)
+        results = kept
+        # Bookkeeping: stamp every rechecked URL.
+        if state_obj is not None:
+            for url in rechecked:
+                state_obj.mark_checked(url)
+            try:
+                save_ignore_state(state_obj)
+            except OSError:
+                pass
+        # Add synthetic results for skipped quarantined URLs so reports show them.
+        for q in quarantined:
+            if q.recheck:
+                continue
+            results.append(
+                _PR(url=q.url, verdict=Verdict.ALIVE, reason="QUARANTINED")
+            )
+        if broken_out:
+            console.print(
+                f"[red]\u26a0\ufe0f quarantine broken out:[/red] {len(broken_out)} URL(s) "
+                "returned alive."
+            )
+        skipped = sum(1 for q in quarantined if not q.recheck)
+        if skipped:
+            console.print(
+                f"[dim]quarantined: {skipped} URL(s) skipped via {DEFAULT_IGNORE_FILENAME}[/dim]"
+            )
 
     if cache_db is not None:
         with ProbeCache(cache_db) as cache:
@@ -308,7 +388,10 @@ def autopsy(
     # --no-fail-on-dead still wins as a kill-switch for backwards compat.
     if not fail_on_dead:
         raise typer.Exit(0)
-    raise typer.Exit(exit_code_for(results, threshold=threshold))
+    code = exit_code_for(results, threshold=threshold)
+    if code == 0 and any(r.reason == "QUARANTINE_BROKEN_OUT" for r in results):
+        code = 1
+    raise typer.Exit(code)
 
 
 @app.command()
@@ -899,6 +982,59 @@ def badge_cmd(
 
 
 _ = BadgeSummary  # re-export hint for type-checkers / __all__ scrapers
+
+
+ignore_app = typer.Typer(
+    name="ignore",
+    help=f"Manage the {DEFAULT_IGNORE_FILENAME} quarantine file.",
+    no_args_is_help=True,
+)
+app.add_typer(ignore_app, name="ignore")
+
+
+@ignore_app.command("add")
+def ignore_add(
+    entry: str = typer.Argument(..., help="URL or glob pattern to quarantine."),
+    ttl: str | None = typer.Option(
+        None,
+        "--ttl",
+        help="Optional TTL like 30d / 12h / 900s for periodic re-check.",
+    ),
+    file: Path = typer.Option(
+        Path(DEFAULT_IGNORE_FILENAME),
+        "--file",
+        "-f",
+        help=f"Path to the {DEFAULT_IGNORE_FILENAME} file (created if missing).",
+    ),
+) -> None:
+    """Append (or upsert) a URL/glob into the quarantine file."""
+    try:
+        added, line = append_ignore_entry(file, entry, ttl=ttl)
+    except IgnoreError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    if added:
+        console.print(f"[green]+[/green] {line}  [dim]→ {file}[/dim]")
+    else:
+        console.print(f"[dim]= {entry} already quarantined in {file}[/dim]")
+
+
+@ignore_app.command("list")
+def ignore_list(
+    file: Path = typer.Option(
+        Path(DEFAULT_IGNORE_FILENAME),
+        "--file",
+        "-f",
+        help=f"Path to the {DEFAULT_IGNORE_FILENAME} file.",
+    ),
+) -> None:
+    """Print every parsed entry in the quarantine file."""
+    parsed = load_ignore_file(file)
+    if not parsed.rules:
+        console.print(f"[dim]{file}: no quarantine rules.[/dim]")
+        raise typer.Exit(0)
+    for rule in parsed.rules:
+        ttl = f"  @ttl={rule.ttl_seconds}s" if rule.ttl_seconds else ""
+        console.print(f"{rule.pattern}{ttl}")
 
 
 if __name__ == "__main__":  # pragma: no cover
